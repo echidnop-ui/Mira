@@ -6,6 +6,21 @@ Heiwa is one persistent hybrid neural cognitive agent. Desktop, Language, Market
 Game and future environments are Worlds/organs of the same Heiwa, not separate
 personalities or separate agents.
 
+## Product intent
+
+Heiwa is intended to be a local-first personal companion, not a cloud knowledge
+speaker and not primarily a chatbot. Its first everyday capabilities are
+conversation and direct computer use through its own visual and motor organs.
+Its permanently stored knowledge may remain deliberately bounded.
+
+When current or encyclopedic information is missing, Heiwa may use available
+Worlds and external services as tools: visually navigate, search, consult another
+model, observe the result, answer, and continue. This must be selected through
+the ordinary Core/Policy/action path rather than an `if unknown: search` rule.
+External text is observation/context, not automatic teacher ground truth.
+Retrieved facts are not automatically made permanent memory; persistence must be
+an explicit learned/memory outcome justified by later relevance.
+
 Core principle:
 
 World -> Observation -> shared Core -> dynamic Affordances -> shared Policy

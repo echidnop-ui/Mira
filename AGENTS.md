@@ -25,6 +25,11 @@ Heiwa is a persistent hybrid cognitive agent.
 
 It is NOT primarily a chatbot.
 
+The product intent is a local-first personal companion focused first on everyday
+conversation and direct computer use. It may obtain missing current knowledge
+through available Worlds/tools, but external output is not automatic teacher
+truth or permanent memory. See `PROJECT.md` for the concise product contract.
+
 The same Heiwa may eventually interact with many Worlds:
 
 - financial markets;

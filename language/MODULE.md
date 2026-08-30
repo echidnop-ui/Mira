@@ -165,8 +165,8 @@ Falling loss without improved retrieval/contrast is not enough.
 
 For current work:
 - `AGENTS.md`
-- `AI_HANDOFF.md`
-- `AI_STATE.md`
+- `PROJECT.md`
+- `docs/NEURAL_EXPERIMENT_PROTOCOL.md`
 - `language/MODULE.md`
 - `language/interface.py` if needed
 - `language/compositional_pedagogy.py`

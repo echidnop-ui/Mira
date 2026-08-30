@@ -15,8 +15,10 @@ def main() -> int:
     print("\nDOCS")
     for rel in (
         "AGENTS.md",
-        "AI_HANDOFF.md",
-        "AI_STATE.md",
+        "PROJECT.md",
+        "DEVELOPMENT.md",
+        "docs/SYMPHONY_OPERATIONS.md",
+        "docs/NEURAL_EXPERIMENT_PROTOCOL.md",
         "language/MODULE.md",
         "runtime/MODULE.md",
         "worlds/desktop/MODULE.md",
@@ -71,7 +73,7 @@ def main() -> int:
     else:
         print("No V2 checkpoint. Do NOT claim a successful V2 run.")
 
-    print("Fresh local source/output overrides AI_HANDOFF.md if they disagree.")
+    print("Fresh local source/output and staged GitHub Issue evidence are authoritative.")
     return 0
 
 if __name__ == "__main__":
