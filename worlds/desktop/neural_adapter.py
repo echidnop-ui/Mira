@@ -110,6 +110,7 @@ class NeuralDesktopWorldAdapter:
         allow_right_clicks: bool = False, allow_typing: bool = False,
         allow_mouse: bool = True, allow_keyboard: bool = True,
         capture_input: bool = True, online_learning: bool = True,
+        move_only: bool = False,
         learn_stationary_desktop: bool = True,
         action_arbiter: PhysicalActionArbiter | None = None,
     ) -> None:
@@ -121,6 +122,7 @@ class NeuralDesktopWorldAdapter:
         self._pointer: tuple[int, int] | None = None
         self.capture_input = bool(capture_input); self._input: EvdevInputCollector | None = None
         self.online_learning = bool(online_learning)
+        self.move_only = bool(move_only)
         self.learn_stationary_desktop = bool(learn_stationary_desktop)
         self.action_arbiter = action_arbiter or PhysicalActionArbiter()
         self._input_status = "starting" if self.capture_input else "disabled"
@@ -594,12 +596,14 @@ class NeuralDesktopWorldAdapter:
         candidate_actions: list[str] = ["noop"]
         motor_ready, _ = self.safety.check(confidence=proposal.confidence, now=now)
         if motor_ready and self.allow_mouse:
-            candidate_actions.extend(("move_pointer", "scroll"))
-            if self.allow_clicks:
+            candidate_actions.append("move_pointer")
+            if not self.move_only:
+                candidate_actions.append("scroll")
+            if not self.move_only and self.allow_clicks:
                 candidate_actions.extend(("left_click", "double_click"))
-            if self.allow_right_clicks:
+            if not self.move_only and self.allow_right_clicks:
                 candidate_actions.append("right_click")
-        if motor_ready and self.allow_keyboard and self.allow_typing:
+        if not self.move_only and motor_ready and self.allow_keyboard and self.allow_typing:
             candidate_actions.extend(("key_press", "type_text"))
         # key_chord is intentionally not offered yet: the current neural motor
         # head does not parameterize a complete chord, so exposing it would

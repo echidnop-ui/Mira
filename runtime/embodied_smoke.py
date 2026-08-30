@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+import math
 import tempfile
 import time
 
@@ -13,6 +14,8 @@ from language.interface import LanguageRepresentation, RealizedUtterance
 from runtime.embodied import EmbodiedRuntime, NullTeacherAdapter
 from runtime.teacher import TeacherMessage, TeacherSessionStore
 from worlds.desktop.inference import NeuralMotorProposal
+from worlds.desktop.neural import NeuralDesktopBody, NeuralDesktopConfig
+from worlds.desktop.online_learning import OnlineDesktopLearner
 from worlds.desktop.motor import MotorResult
 from worlds.desktop.neural_adapter import NeuralDesktopWorldAdapter, NeuralSafetyGate
 from worlds.desktop.training.input_events import EV_REL, REL_X, RawInputEvent
@@ -88,7 +91,8 @@ class _Inference:
     def learn_consequence(self, before, action_kind, parameters, after):
         return {"prediction_loss": 0.1, "temporal_error": 0.05, "change_error": 0.05}
     def learn_transition(self, **kwargs):
-        return {"fast_loss": 0.1, "replay_size": 1, "ownership": kwargs["ownership"]}
+        return {"fast_loss": 0.1, "fast_updated": True, "fast_parameter_delta": 0.001,
+                "target_error_px": 4.0, "replay_size": 1, "ownership": kwargs["ownership"]}
     def close(self): pass
 
 
@@ -168,19 +172,20 @@ def main() -> int:
             local_visual_keys, time.monotonic(),
         )
         assert not corrected and not confirmed and policy.feedback == feedback_before
-        runtime.step(now=time.monotonic()); time.sleep(0.01)
+        observable_records = []
+        runtime.step(now=time.monotonic()); observable_records.append(runtime.last_observable_record); time.sleep(0.01)
         # A physical event in the pending causal window is external action,
         # never approval/rejection or a clean Heiwa completion.
         world._input = _UserInput(); world._input_status = "linux-evdev"
         for _ in range(8):
-            runtime.step(now=time.monotonic()); time.sleep(0.01)
+            runtime.step(now=time.monotonic()); observable_records.append(runtime.last_observable_record); time.sleep(0.01)
         # Teacher work is asynchronous. On a loaded ROCm/desktop host the
         # fourth synthetic reply may arrive after eight fast runtime steps,
         # so wait for the explicit correction instead of making this test
         # scheduler-speed dependent.
         deadline = time.monotonic() + 3.0
         while not language.teacher_targets and time.monotonic() < deadline:
-            runtime.step(now=time.monotonic()); time.sleep(0.01)
+            runtime.step(now=time.monotonic()); observable_records.append(runtime.last_observable_record); time.sleep(0.01)
         assert policy.states and core.telemetry().forward_calls >= 4
         assert language.inputs and language.inputs[0].source_kind == "mentor"
         assert any(call[0] == "mouse" for call in motor.calls)
@@ -199,6 +204,54 @@ def main() -> int:
         assert any(r["kind"] == "teacher_invalid" and r["organism_continues"] for r in records)
         consequences = [r for r in records if r["kind"] == "consequence"]
         assert consequences[0]["consequence"]["payload"]["ownership"] == "mixed_user_interference"
+        observable = next(item for item in reversed(observable_records)
+                          if item and item["causal"]["consequences"] and item["online"]["updates"])
+        assert observable["frame"]["id"].startswith("frame-")
+        assert observable["neural"] == {"target": [120, 80], "bbox": (0.1, 0.1, 0.3, 0.2),
+                                        "confidence": 0.9}
+        assert observable["causal"]["attempt"]["id"].startswith("desktop-attempt-")
+        linked = observable["causal"]["completions"][0]
+        consequence_link = observable["causal"]["consequences"][0]
+        assert linked["transition_id"] == consequence_link["transition_id"]
+        assert linked["id"] == consequence_link["completed_action_id"]
+        source_consequence = next(r["consequence"] for r in consequences
+                                  if r["consequence"]["id"] == consequence_link["id"])
+        assert source_consequence["transition_id"] == consequence_link["transition_id"]
+        assert source_consequence["completed_action_id"] == consequence_link["completed_action_id"]
+        assert observable["online"]["updates"]["fast_updated"] is True
+        assert observable["online"]["parameter_delta"]["fast_parameter_delta"] == 0.001
+        assert observable["rolling"]["pointer_correction_samples"] > 0
+        move_only_world = NeuralDesktopWorldAdapter(
+            _Inference(), motor=_Motor(),
+            safety=NeuralSafetyGate(confidence=0.0, max_actions_per_second=1000),
+            allow_clicks=True, allow_typing=True, move_only=True, capture_input=False,
+        )
+        move_only_frame = move_only_world.poll(time.monotonic())
+        assert {item.action for item in move_only_frame.affordances} == {
+            "desktop.noop", "desktop.move_pointer"
+        }
+        move_only_world.close()
+        torch.manual_seed(17)
+        tiny_config = NeuralDesktopConfig(
+            image_height=64, image_width=96, hidden_size=64, token_size=64,
+            region_count=4, transformer_layers=1, transformer_heads=4,
+            action_embed_size=16, task_context_size=32, max_read_bytes=12,
+        )
+        tiny_model = NeuralDesktopBody(tiny_config)
+        tiny_learner = OnlineDesktopLearner(tiny_model, device=torch.device("cpu"), work_batch=1)
+        before_pixels = torch.rand(1, 3, 64, 96)
+        after_pixels = (before_pixels + 0.05).clamp(0, 1)
+        before_state = tiny_model.observe(before_pixels).detached()
+        after_state = tiny_model.observe(after_pixels).detached()
+        actual_metrics = tiny_learner.process_transition(
+            before_frame=before_pixels, after_frame=after_pixels,
+            before_state=before_state, after_state=after_state,
+            action_kind=1, parameters=(0.25, 0.5, 0.0, 0.0),
+            ownership="heiwa", completion=True,
+        )
+        assert actual_metrics["fast_updated"] is True
+        assert math.isfinite(float(actual_metrics["fast_parameter_delta"]))
+        assert float(actual_metrics["fast_parameter_delta"]) > 0.0
         # Persisted IDs survive restart and reject duplicate inbound/outbound messages.
         resumed = TeacherSessionStore(store_path, teacher_id=teacher.teacher_id)
         assert resumed.conversation_id == store.conversation_id

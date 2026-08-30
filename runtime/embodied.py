@@ -154,6 +154,9 @@ class EmbodiedRuntime:
         self.teacher_channel = _AsyncTeacherChannel(teacher, interval=teacher_interval)
         self.episode_id = f"desktop-episode-{uuid4().hex}"
         self.last_attempt = None; self.last_consequence = None; self.last_heiwa_utterance = ""
+        self.last_observable_record: dict[str, object] | None = None
+        self._observable_accepted = 0; self._observable_rejected = 0
+        self._observable_pointer_errors: deque[float] = deque(maxlen=20)
         self.last_heiwa_message_id = ""
         self.last_teacher_utterance = ""; self.last_expression_decision: DesktopDecision | None = None
         # Technical provenance for self-expression. This is deliberately NOT a
@@ -1370,6 +1373,8 @@ class EmbodiedRuntime:
         attempt = self.world.execute(intent, now=time.monotonic())
         self.last_stage_latency_ms["motor_execution"] = (time.monotonic() - stage_started) * 1000.0
         self.last_attempt = attempt
+        if attempt.accepted: self._observable_accepted += 1
+        else: self._observable_rejected += 1
         if attempt.accepted:
             self.teacher_store.record_action(action_id)
             # Preserve a short causal Policy trace for explicit F23 correction.
@@ -1434,8 +1439,51 @@ class EmbodiedRuntime:
                     "text": utterance, "at": float(now),
                 })
         self._pending_immediate_rejection = None
+        self.last_observable_record = self._observable_record(frame=frame, intent=intent, attempt=attempt)
         self._finish_step(step_started)
         return attempt
+
+    def _observable_record(self, *, frame, intent, attempt) -> dict[str, object]:
+        """Build live evidence from the production causal objects, without synthetic labels."""
+        selected = next((item for item in frame.affordances if item.id == intent.affordance_id), None)
+        payload = {} if selected is None else selected.payload
+        completed = tuple(frame.completed_actions); consequences = tuple(frame.consequences)
+        learning = [dict(item.payload.get("local_prediction_losses", {})) for item in consequences
+                    if isinstance(item.payload.get("local_prediction_losses"), dict)]
+        latest = learning[-1] if learning else {}
+        for metrics in learning:
+            error = metrics.get("target_error_px")
+            if isinstance(error, (int, float)) and __import__("math").isfinite(float(error)):
+                self._observable_pointer_errors.append(float(error))
+        deltas = {key: float(value) for key, value in latest.items()
+                  if key.endswith("_parameter_delta") and isinstance(value, (int, float))
+                  and __import__("math").isfinite(float(value))}
+        updates = {key: bool(value) for key, value in latest.items() if key.endswith("_updated")}
+        digest = str(payload.get("frame_digest", "")) or next((
+            str(item.payload.get("frame_digest", "")) for item in frame.observations
+            if item.kind == "desktop.neural_visual_state"), "")
+        return {
+            "frame": {"monotonic": frame.observed_at, "id": digest},
+            "neural": {"target": [payload.get("neural_target_x"), payload.get("neural_target_y")],
+                       "bbox": payload.get("neural_target_bbox"),
+                       "confidence": payload.get("neural_confidence")},
+            "organs": ["vision", "core", "policy", "desktop_motor", "online_learner"],
+            "causal": {
+                "intent": {"id": intent.id, "transition_id": intent.transition_id},
+                "attempt": {"id": attempt.id, "transition_id": attempt.transition_id,
+                            "accepted": attempt.accepted, "action": attempt.action},
+                "completions": [{"id": item.id, "attempt_id": item.attempt_id,
+                                 "transition_id": item.transition_id} for item in completed],
+                "consequences": [{"id": item.id, "completed_action_id": item.completed_action_id,
+                                  "transition_id": item.transition_id} for item in consequences]},
+            "online": {"updates": updates, "parameter_delta": deltas},
+            "rolling": {"attempts_accepted": self._observable_accepted,
+                        "attempts_rejected": self._observable_rejected,
+                        "pointer_correction_error_mean_px": (
+                            sum(self._observable_pointer_errors) / len(self._observable_pointer_errors)
+                            if self._observable_pointer_errors else None),
+                        "pointer_correction_samples": len(self._observable_pointer_errors)},
+        }
 
     def _finish_step(self, started: float) -> None:
         self.steps += 1; self.last_step_latency_ms = (time.monotonic() - started) * 1000
@@ -1522,9 +1570,8 @@ class EmbodiedRuntime:
                     time.sleep(min(max(interval, 0.1), 2.0))
                     continue
                 steps += 1
-                print(json.dumps({"step": steps, "attempt": None if attempt is None else
-                                  {"action": attempt.action, "accepted": attempt.accepted,
-                                   "transition_id": attempt.transition_id}}, ensure_ascii=False), flush=True)
+                print(json.dumps({"step": steps, "observable": self.last_observable_record},
+                                 ensure_ascii=False, allow_nan=False), flush=True)
                 if interval: time.sleep(interval)
         finally:
             try:
@@ -1619,13 +1666,14 @@ def main() -> int:
             confidence=confidence,
             max_actions_per_second=config.maximum_actions_per_second,
         ),
-        allow_clicks=config.clicks or args.allow_clicks,
-        allow_right_clicks=config.right_clicks or args.allow_right_clicks,
-        allow_typing=config.typing or args.allow_typing,
+        allow_clicks=args.allow_clicks,
+        allow_right_clicks=args.allow_right_clicks,
+        allow_typing=args.allow_typing,
         allow_mouse=config.mouse,
         allow_keyboard=config.keyboard or args.allow_typing,
         capture_input=config.capture_user_input,
         online_learning=config.online_learning,
+        move_only=not (args.allow_clicks or args.allow_right_clicks or args.allow_typing),
         learn_stationary_desktop=config.learn_stationary_desktop,
         action_arbiter=action_arbiter,
     )
@@ -1716,8 +1764,8 @@ def main() -> int:
     print(json.dumps({"runtime": "embodied", "one_core": True, "teacher": teacher.teacher_id,
                       "conversation_id": store.conversation_id, "pixel_only": True,
                       "autonomous": config.autonomous,
-                      "allow_clicks": config.clicks or args.allow_clicks,
-                      "allow_typing": config.typing or args.allow_typing,
+                      "allow_clicks": args.allow_clicks,
+                      "allow_typing": args.allow_typing,
                       "online_learning": config.online_learning,
                       "config": str(args.config)}))
     interval = config.observation_interval_seconds if args.interval is None else args.interval

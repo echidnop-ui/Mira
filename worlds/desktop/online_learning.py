@@ -216,7 +216,19 @@ class OnlineDesktopLearner:
         self.skipped_nonfinite += 1
         self.model.eval()
         return {f"{stage}_status": "skipped_nonfinite", f"{stage}_nonfinite": reason,
+                f"{stage}_updated": False, f"{stage}_parameter_delta": 0.0,
                 f"{stage}_latency_ms": (time.perf_counter() - started) * 1000.0}
+
+    def _online_parameter_snapshot(self) -> list[Tensor]:
+        return [parameter.detach().clone() for group in self.optimizer.param_groups
+                for parameter in group["params"]]
+
+    def _online_parameter_delta(self, before: list[Tensor]) -> float:
+        current = [parameter.detach() for group in self.optimizer.param_groups
+                   for parameter in group["params"]]
+        squared = sum(float(torch.sum((new - old).float().square()).cpu())
+                      for old, new in zip(before, current, strict=True))
+        return squared ** 0.5
 
     def learn_pointer_correction(
         self, *, before_state: VisualState, target_xy: tuple[float, float], repeats: int = 1,
@@ -460,6 +472,7 @@ class OnlineDesktopLearner:
         kind = torch.tensor([action_kind], device=self.device)
         values = torch.tensor([parameters], device=self.device)
         self.model.train(); self.optimizer.zero_grad(set_to_none=True)
+        parameter_before = self._online_parameter_snapshot()
         predicted, change_logits = self.model.predict_next(before, kind, values)
         patch_change = 1.0 - F.cosine_similarity(before.patch_tokens, after.patch_tokens, dim=-1)
         temporal = F.smooth_l1_loss(predicted, after.latent.detach())
@@ -477,6 +490,8 @@ class OnlineDesktopLearner:
         self.fast_updates += 1
         return {"fast_loss": float(loss.detach()), "fast_temporal": float(temporal.detach()),
                 "fast_change": float(change.detach()),
+                "fast_updated": True,
+                "fast_parameter_delta": self._online_parameter_delta(parameter_before),
                 "fast_latency_ms": (time.perf_counter() - started) * 1000.0}
 
     def _work(self, count: int, *, stage: str) -> dict[str, float]:
@@ -491,6 +506,7 @@ class OnlineDesktopLearner:
         actions = torch.tensor([item.action_kind for item in items], device=self.device)
         parameters = torch.tensor([item.parameters for item in items], device=self.device)
         self.model.train(); self.optimizer.zero_grad(set_to_none=True)
+        parameter_before = self._online_parameter_snapshot()
         # Live autonomous learning stays in fp32. Mixed-precision GradScaler state
         # previously made WORK crash after FAST used the same optimizer.
         with torch.autocast(device_type="cuda", enabled=False):
@@ -560,6 +576,8 @@ class OnlineDesktopLearner:
         else: self.work_updates += 1
         result = {f"{stage}_loss": float(total.detach()), f"{stage}_temporal": float(temporal.detach()),
                   f"{stage}_change": float(change.detach()), f"{stage}_feature": float(feature.detach()),
+                  f"{stage}_updated": True,
+                  f"{stage}_parameter_delta": self._online_parameter_delta(parameter_before),
                   f"{stage}_latency_ms": (time.perf_counter() - started) * 1000.0}
         if bool(own.any()): result[f"{stage}_competence"] = float(competence.detach())
         if rows:
