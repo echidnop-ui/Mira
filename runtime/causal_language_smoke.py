@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 import math
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import torch
 
@@ -190,19 +192,82 @@ def main() -> int:
     assert cycle.pending_count == 0
     assert language.telemetry().traces_created == 0
 
+    # Persist the learned shared organs after every causal transition has
+    # resolved, then prove the changed choice survives in fresh Core/Policy
+    # instances for a similar but non-identical external-language cue.
+    with TemporaryDirectory() as directory:
+        checkpoint = Path(directory) / "language-causal.snapshot"
+        generation = cycle.save_checkpoint(checkpoint)
+        restored_world = _LanguageWorld(
+            max_actions=1,
+            text="угроза находится слева",
+        )
+        restored_core = _core()
+        restored_policy = DynamicAffordancePolicy(
+            DynamicPolicyConfig(
+                state_size=8,
+                affordance_feature_size=16,
+                hidden_size=16,
+                learning_rate=0.05,
+                entropy_coefficient=0.0,
+                exploration_mixture=0.0,
+                device="cpu",
+            )
+        )
+        restored_builder = _LanguageInputBuilder(language)
+        restored_cycle = CausalCognitionCycle(
+            world=restored_world,
+            core=restored_core,
+            policy=restored_policy,
+            input_builder=restored_builder,
+            consequence_interpreter=_RewardInterpreter(),
+            transition_prefix="language-causal",
+        )
+        assert restored_cycle.restore_checkpoint(checkpoint) == generation
+        restored_started = restored_cycle.step(now=10.0).started
+        assert restored_started is not None
+        restored_learning = restored_cycle.step(now=11.0).learning
+        assert len(restored_learning) == 1
+        restored_update = restored_learning[0]
+        restored_completed = restored_started.completed_action
+        assert restored_completed is not None
+        restored_consequence_id = f"consequence:{restored_started.transition_id}"
+        assert restored_started.transition_id == "language-causal:9"
+        assert restored_started.intent.transition_id == restored_started.transition_id
+        assert restored_started.attempt.transition_id == restored_started.transition_id
+        assert restored_completed.transition_id == restored_started.transition_id
+        assert restored_update.transition_id == restored_started.transition_id
+        assert restored_update.consequence_id == restored_consequence_id
+        assert restored_update.policy_updated and restored_update.core_updated
+        assert restored_world.choices == [world.choices[-1]]
+        assert restored_world.choices[0] != world.initial_action
+        assert restored_cycle.pending_count == 0
+
+    print("observation: 'опасность слева' -> 'угроза находится слева'")
+    print("participating_organs: Language -> Core -> Policy")
     print(
-        {
-            "language_representation_delta": language_delta,
-            "caused_core_state_delta": core_delta,
-            "choices": world.choices,
-            "initial_harmful_action": world.initial_action,
-            "final_action": world.choices[-1],
-            "language_teacher_updates": language.telemetry().teacher_language_updates,
-            "language_learning_traces": language.telemetry().traces_created,
-            "policy_updates": policy.telemetry().learning_updates,
-            "core_updates": core.telemetry().learning_updates,
-            "pending": cycle.pending_count,
-        }
+        "behavior: "
+        f"before={world.initial_action} learned={world.choices[-1]} "
+        f"after_reload={restored_world.choices[0]}"
+    )
+    print(
+        "causal_chain: "
+        f"transition={restored_started.transition_id} "
+        f"intent={restored_started.intent.id} "
+        f"attempt={restored_started.attempt.id} "
+        f"completed={restored_completed.id} "
+        f"consequence={restored_update.consequence_id}"
+    )
+    print(
+        "learning: "
+        f"policy_updated={restored_update.policy_updated} "
+        f"core_updated={restored_update.core_updated} "
+        f"resolved={restored_update.resolved} pending={restored_cycle.pending_count}"
+    )
+    print(
+        "influence: "
+        f"language_delta={language_delta:.6f} core_delta={core_delta:.6f} "
+        f"teacher_updates={language.telemetry().teacher_language_updates}"
     )
     return 0
 
