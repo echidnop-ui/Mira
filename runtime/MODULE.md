@@ -91,6 +91,8 @@ causal.py
 causal_smoke.py
     CPU-only controlled end-to-end scenario: persistent Core + dynamic Policy
     + simulated World + delayed causal consequence + changed next decision.
+    Watch each causal event interactively with
+    `python3 -m runtime.causal_smoke --step`.
 
 ## READ SCOPE
 

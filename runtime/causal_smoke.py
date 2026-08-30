@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import argparse
 from dataclasses import dataclass
+import math
+import time
 
 import torch
 
@@ -60,6 +63,16 @@ class _RewardInterpreter:
             core_output_gradient=core_gradient,
             terminal=True,
         )
+
+
+class _NoLearningInterpreter:
+    def evaluate(
+        self,
+        consequence: Consequence,
+        transition: PendingTransition,
+    ) -> CausalLearningSignal:
+        assert consequence.transition_id == transition.transition_id
+        return CausalLearningSignal(terminal=True)
 
 
 @dataclass(slots=True)
@@ -194,11 +207,8 @@ def _core() -> PersonalCognitiveCore:
     )
 
 
-def main() -> int:
-    torch.manual_seed(7)
-    world = _ControlledWorld(max_actions=8)
-    core = _core()
-    policy = DynamicAffordancePolicy(
+def _policy() -> DynamicAffordancePolicy:
+    return DynamicAffordancePolicy(
         DynamicPolicyConfig(
             state_size=8,
             affordance_feature_size=16,
@@ -209,6 +219,139 @@ def main() -> int:
             device="cpu",
         )
     )
+
+
+def _probe(
+    core: PersonalCognitiveCore,
+    policy: DynamicAffordancePolicy,
+    *,
+    signal: float,
+    transition_id: str,
+) -> tuple[str, tuple[str, ...], float]:
+    core.reset_state()
+    state = core.integrate(
+        CoreInput(
+            transition_id=transition_id,
+            world_id="controlled",
+            representation=(signal, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+        ),
+        remember_for_learning=False,
+    )
+    intent = policy.choose(
+        state,
+        (
+            Affordance("probe-left", "controlled", "choose.left", 0.0),
+            Affordance("probe-right", "controlled", "choose.right", 0.0),
+        ),
+        now=0.0,
+        remember_for_learning=False,
+    )
+    return (
+        intent.action,
+        tuple(state.metadata["core_active_experts"]),
+        policy.telemetry().last_score_margin,
+    )
+
+
+def _snapshot(module: torch.nn.Module) -> dict[str, torch.Tensor]:
+    return {
+        name: value.detach().cpu().clone()
+        for name, value in module.state_dict().items()
+    }
+
+
+def _parameter_delta(
+    before: dict[str, torch.Tensor],
+    module: torch.nn.Module,
+) -> float:
+    squared = 0.0
+    for name, value in module.state_dict().items():
+        difference = value.detach().cpu().to(torch.float64) - before[name].to(
+            torch.float64
+        )
+        squared += float(torch.sum(difference * difference))
+    return math.sqrt(squared)
+
+
+def _pause(*, step: bool, delay: float) -> None:
+    if step:
+        input("  [Enter for next event]")
+    elif delay:
+        time.sleep(delay)
+
+
+def _print_step(
+    result,
+    *,
+    policy_score_margin: float | None,
+    step: bool,
+    delay: float,
+) -> None:
+    for completed in result.frame.completed_actions:
+        print(
+            f"COMPLETED id={completed.id} attempt_id={completed.attempt_id} "
+            f"transition_id={completed.transition_id} action={completed.action}"
+        )
+        _pause(step=step, delay=delay)
+    for consequence in result.frame.consequences:
+        print(
+            f"CONSEQUENCE id={consequence.id} completed_action_id="
+            f"{consequence.completed_action_id} transition_id="
+            f"{consequence.transition_id} reward={consequence.payload['reward']:+.1f}"
+        )
+        _pause(step=step, delay=delay)
+    for learned in result.learning:
+        print(
+            f"LEARNING transition_id={learned.transition_id} consequence_id="
+            f"{learned.consequence_id} policy_updated={learned.policy_updated} "
+            f"core_updated={learned.core_updated} resolved={learned.resolved}"
+        )
+        _pause(step=step, delay=delay)
+    if result.frame.observations:
+        observation = result.frame.observations[0]
+        print(
+            f"OBSERVATION id={observation.id} kind={observation.kind} "
+            f"signal={observation.payload['signal']:.1f}"
+        )
+        _pause(step=step, delay=delay)
+    if result.started is not None:
+        started = result.started
+        state = result.integrated_state
+        assert state is not None
+        print(
+            f"ORGANS transition_id={started.transition_id} Core experts="
+            f"{tuple(state.metadata['core_active_experts'])} Policy "
+            f"score_margin={policy_score_margin:.6f}"
+        )
+        _pause(step=step, delay=delay)
+        print(
+            f"INTENT id={started.intent.id} transition_id="
+            f"{started.intent.transition_id} action={started.intent.action}"
+        )
+        _pause(step=step, delay=delay)
+        print(
+            f"ATTEMPT id={started.attempt.id} intent_id="
+            f"{started.attempt.intent_id} transition_id="
+            f"{started.attempt.transition_id} accepted={started.attempt.accepted}"
+        )
+        _pause(step=step, delay=delay)
+
+
+def _run_learning_demo(*, step: bool, delay: float):
+    torch.manual_seed(7)
+    world = _ControlledWorld(max_actions=8)
+    core = _core()
+    policy = _policy()
+    before_action, before_experts, before_margin = _probe(
+        core, policy, signal=0.9, transition_id="probe:before"
+    )
+    core_before = _snapshot(core)
+    policy_before = _snapshot(policy)
+    print(
+        f"BEFORE signal=0.9 action={before_action} Core experts="
+        f"{before_experts} Policy score_margin={before_margin:.6f}"
+    )
+    _pause(step=step, delay=delay)
     cycle = CausalCognitionCycle(
         world=world,
         core=core,
@@ -218,7 +361,20 @@ def main() -> int:
         transition_prefix="controlled-test",
     )
 
-    results = [cycle.step(now=float(step)) for step in range(9)]
+    results = []
+    for number in range(9):
+        result = cycle.step(now=float(number))
+        results.append(result)
+        _print_step(
+            result,
+            policy_score_margin=(
+                policy.telemetry().last_score_margin
+                if result.started is not None
+                else None
+            ),
+            step=step,
+            delay=delay,
+        )
     learned = tuple(
         item
         for result in results
@@ -234,20 +390,115 @@ def main() -> int:
     assert all(item.core_updated for item in learned)
     assert cycle.pending_count == 0
     assert policy.telemetry().learning_updates == 8
-    assert core.telemetry().forward_calls == 8
+    # Eight causal decisions plus the read-only BEFORE probe.
+    assert core.telemetry().forward_calls == 9
     assert core.telemetry().learning_updates == 8
     assert core.telemetry().traces_consumed == 8
 
+    core_delta = _parameter_delta(core_before, core)
+    policy_delta = _parameter_delta(policy_before, policy)
+    after_action, after_experts, after_margin = _probe(
+        core, policy, signal=0.9, transition_id="probe:after"
+    )
+    assert math.isfinite(core_delta) and core_delta > 0.0
+    assert math.isfinite(policy_delta) and policy_delta > 0.0
+    assert after_action != before_action
+
+    return (
+        before_action,
+        before_experts,
+        before_margin,
+        after_action,
+        after_experts,
+        after_margin,
+        core_delta,
+        policy_delta,
+        world,
+        learned,
+        cycle,
+    )
+
+
+def _run_no_learning_control():
+    torch.manual_seed(7)
+    world = _ControlledWorld(max_actions=8)
+    core = _core()
+    policy = _policy()
+    before_action, _, _ = _probe(
+        core, policy, signal=0.9, transition_id="control:before"
+    )
+    core_before = _snapshot(core)
+    policy_before = _snapshot(policy)
+    cycle = CausalCognitionCycle(
+        world=world,
+        core=core,
+        policy=policy,
+        input_builder=_ControlledInputBuilder(),
+        consequence_interpreter=_NoLearningInterpreter(),
+        transition_prefix="controlled-no-learning",
+    )
+    results = [cycle.step(now=float(number)) for number in range(9)]
+    learned = tuple(item for result in results for item in result.learning)
+    after_action, _, _ = _probe(
+        core, policy, signal=0.9, transition_id="control:after"
+    )
+    core_delta = _parameter_delta(core_before, core)
+    policy_delta = _parameter_delta(policy_before, policy)
+    assert all(not item.policy_updated and not item.core_updated for item in learned)
+    assert before_action == after_action
+    assert core_delta == 0.0
+    assert policy_delta == 0.0
+    return before_action, after_action, core_delta, policy_delta, world.choices
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Watch Heiwa's causal learning loop")
+    parser.add_argument(
+        "--step", action="store_true", help="wait for Enter after each causal event"
+    )
+    parser.add_argument(
+        "--delay",
+        type=float,
+        default=0.0,
+        help="seconds to pause after each causal event",
+    )
+    args = parser.parse_args()
+    if not math.isfinite(args.delay) or args.delay < 0.0:
+        parser.error("--delay must be a finite non-negative number")
+
+    (
+        before_action,
+        _,
+        _,
+        after_action,
+        after_experts,
+        after_margin,
+        core_delta,
+        policy_delta,
+        world,
+        learned,
+        cycle,
+    ) = _run_learning_demo(step=args.step, delay=args.delay)
+    control = _run_no_learning_control()
+
     print(
-        {
-            "choices": world.choices,
-            "initial_harmful_action": world.initial_action,
-            "final_action": world.choices[-1],
-            "causal_resolutions": len(learned),
-            "policy_updates": policy.telemetry().learning_updates,
-            "core_updates": core.telemetry().learning_updates,
-            "pending": cycle.pending_count,
-        }
+        f"AFTER signal=0.9 action={after_action} Core experts={after_experts} "
+        f"Policy score_margin={after_margin:.6f}"
+    )
+    print(
+        f"PARAMETER DELTA Core={core_delta:.12f} finite={math.isfinite(core_delta)} "
+        f"Policy={policy_delta:.12f} finite={math.isfinite(policy_delta)}"
+    )
+    print(
+        f"NO-LEARNING CONTROL before={control[0]} after={control[1]} "
+        f"Core_delta={control[2]:.1f} Policy_delta={control[3]:.1f} "
+        f"choices={control[4]}"
+    )
+    print(
+        "SUMMARY "
+        f"BEFORE={before_action} LEARNING=8 linked transitions "
+        f"(Core+Policy updated={len(learned)}) AFTER={after_action} "
+        f"pending={cycle.pending_count}"
     )
     return 0
 
