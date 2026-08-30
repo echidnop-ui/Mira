@@ -18,7 +18,12 @@ Important distinction: repeated atomic click/move/scroll decisions are NOT `Acti
 
 # HEIWA V2 — CURRENT STATE
 
-Updated: 2026-08-28
+Snapshot: 2026-08-28. Operational routing note added: 2026-08-31.
+
+This is a dated state snapshot, not the live task queue. Active work is tracked
+in private staged GitHub Issues under `automation/symphony/WORKFLOW.md`. See
+`docs/SYMPHONY_OPERATIONS.md` and do not let an older NEXT entry override a
+newer Issue handoff.
 
 Current priority:
 

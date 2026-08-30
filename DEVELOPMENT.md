@@ -39,20 +39,27 @@
 
 Не строить месяцами architecture foundation без runnable Heiwa.
 
+Для neural work обязательный расширенный протокол:
+`docs/NEURAL_EXPERIMENT_PROTOCOL.md`.
+
+Для автономной разработки и handoff между Codex-агентами:
+`docs/SYMPHONY_OPERATIONS.md`.
+
 ---
 
 ## Сейчас
 
-Текущий активный vertical slice:
+Активная очередь разработки определяется открытыми staged GitHub Issues с
+меткой `symphony-ready`, а правила исполнения —
+`automation/symphony/WORKFLOW.md`.
 
-DESKTOP.
-
-Не продолжать Market только потому, что в repository существует
+Текущие независимые направления: causal Runtime integration, Language E2E и
+Memory E2E. Desktop/Vision/GPU запускаются только отдельным явно разрешённым
+экспериментом. Не продолжать Market только потому, что в repository существует
 `worlds/market`.
 
-Если документация или старый код противоречат текущему решению
-Desktop-first, текущая документация PROJECT.md считается направлением
-разработки.
+Старые разделы NEXT в AI_HANDOFF/AI_STATE — исторический контекст, а не более
+новая задача, чем активный Issue.
 
 ---
 

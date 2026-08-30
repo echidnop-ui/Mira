@@ -1,4 +1,13 @@
-HEIWA LIVE DEVELOPMENTAL LANGUAGE DIALOGUE
+HEIWA V2 — DEVELOPMENT INDEX AND HISTORICAL LIVE LANGUAGE NOTES
+
+Current developer entry points:
+  AGENTS.md
+  DEVELOPMENT.md
+  docs/SYMPHONY_OPERATIONS.md
+  docs/NEURAL_EXPERIMENT_PROTOCOL.md
+
+The sections below are historical setup notes for the developmental language
+dialogue and are not the active autonomous task queue.
 
 Adds:
   language/developmental.py

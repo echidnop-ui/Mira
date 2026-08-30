@@ -19,6 +19,11 @@ hooks:
     git clone --quiet --branch main --single-branch git@github.com:echidnop-ui/heiwa.git .
     git config user.name "Heiwa Symphony"
     git config user.email "symphony@localhost"
+  before_run: |
+    git fetch --quiet origin main
+    if [ -z "$(git status --porcelain)" ]; then
+      git merge --quiet --ff-only origin/main
+    fi
   timeout_ms: 120000
 agent:
   max_concurrent_agents: 3
@@ -50,6 +55,8 @@ Hard constraints:
 - Do not use sudo and do not access `/dev/input` or the live desktop.
 - Never modify `/home/echidna/heiwa_v2`; only this workspace is writable scope.
 - Follow `AGENTS.md`: read the target `MODULE.md`, public interface, and exact relevant files only.
+- For neural training, checkpoints, online learning or representation changes, also follow
+  `docs/NEURAL_EXPERIMENT_PROTOCOL.md`.
 - No broad repository audit, dependency additions, cosmetic refactor, architecture redesign, or
   speculative fix. Use CPU-only tests and one explicit hypothesis.
 - Preserve causal transition semantics and never treat screen/state change or silence as reward.

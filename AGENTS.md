@@ -1103,3 +1103,39 @@ A module boundary is healthy when:
 
 If understanding a local module requires reading unrelated World, UI,
 Language, Memory, and Core internals, the architecture needs correction.
+
+---
+
+# 33. SYMPHONY AUTOMATED WORK
+
+Automated Codex work is governed by:
+
+    automation/symphony/WORKFLOW.md
+    docs/SYMPHONY_OPERATIONS.md
+
+GitHub Issues and their structured stage comments are the active execution
+queue. Historical NEXT sections in handoff documents are not authority to
+override a newer staged Issue.
+
+An automated agent must perform exactly the role named by its stage label. A
+Tester does not edit. A Fixer requires reproducible Tester evidence and makes
+one fix. An Integrator independently verifies and never force-updates `main`.
+
+Removing `symphony-ready` is the emergency stop for an Issue.
+
+---
+
+# 34. NEURAL EXPERIMENTS
+
+For neural training, checkpoint, online-learning or representation changes,
+also follow:
+
+    docs/NEURAL_EXPERIMENT_PROTOCOL.md
+
+The required cadence is:
+
+    EXPERIMENT -> ANALYSIS -> ONE FIX -> EXPERIMENT
+
+Do not accept a neural change from falling loss alone. Require an independent
+gate, causal attribution, save/reload evidence and retention of previously
+accepted skills.

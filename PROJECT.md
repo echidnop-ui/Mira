@@ -105,9 +105,16 @@ online learner continues to train predictive/representation/competence paths.
 
 ## Current development direction
 
-The active Desktop task is to make the existing neural body participate in the
-shared cognition correctly, rather than replacing it with another Desktop
-stack.
+The active program is integrated persistent causal learning across existing
+organs. The current execution queue lives in staged private GitHub Issues and
+is governed by `automation/symphony/WORKFLOW.md`. Runtime, Language and Memory
+may be tested independently only when the test demonstrates their effect on the
+shared loop; isolated module metrics are not the final success criterion.
+
+Desktop work remains pixel-first and must make the existing neural body
+participate in shared cognition rather than replacing it with another Desktop
+stack. GPU/Vision work is an explicitly scheduled exclusive lane, not an
+opportunistic background task.
 
 Do not create parallel `screen.py`, `wayland.py`, another ydotool motor, or a
 second small Core/Policy unless the existing module contract is intentionally
@@ -116,3 +123,6 @@ being replaced.
 The next experiments should measure whether shared Policy actually escapes a
 collapsed specialist motor prior during long real Desktop life, while keeping
 vision, motor targets and causal consequence attribution intact.
+
+Neural changes follow `docs/NEURAL_EXPERIMENT_PROTOCOL.md`. Autonomous Codex
+work follows `docs/SYMPHONY_OPERATIONS.md`.

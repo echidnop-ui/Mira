@@ -1,8 +1,13 @@
 # HEIWA V2 — AI HANDOFF
 
-Updated: 2026-08-28
+Snapshot: 2026-08-28. Operational routing note added: 2026-08-31.
 
 Read this after `AGENTS.md`. The local tree at `~/heiwa_v2` is authoritative.
+
+Operational note: this file contains dated experiment history. The active work
+queue is the set of open private GitHub Issues carrying `symphony-ready`; their
+stage comments are newer handoff evidence. See `docs/SYMPHONY_OPERATIONS.md`.
+Do not execute an older NEXT section when it conflicts with an active Issue.
 
 Status words:
 - VERIFIED: user actually ran it and showed successful output.

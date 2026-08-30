@@ -1,0 +1,92 @@
+name: Symphony staged task
+description: Bounded Tester -> Fixer -> Integrator work for Heiwa v2
+title: "[SYMPHONY] "
+labels:
+  - symphony-ready
+  - stage:tester
+body:
+  - type: markdown
+    attributes:
+      value: |
+        One Issue must answer one bounded hypothesis. Tester starts read-only.
+        Do not combine unrelated organs or neural changes.
+  - type: dropdown
+    id: module
+    attributes:
+      label: Target module
+      options:
+        - runtime
+        - core
+        - policy
+        - learning
+        - language
+        - memory
+        - motivation
+        - worlds/desktop
+        - contracts/public interface
+        - repository automation/documentation
+    validations:
+      required: true
+  - type: textarea
+    id: failure
+    attributes:
+      label: Observed failure or question
+      description: State observable evidence. Do not prescribe an unverified fix.
+      placeholder: What currently fails, behaves weakly, or remains unverified?
+    validations:
+      required: true
+  - type: textarea
+    id: baseline
+    attributes:
+      label: Executable baseline
+      description: Exact CPU command or bounded experiment that establishes BEFORE.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: independent
+    attributes:
+      label: Independent holdout or negative control
+      description: Explain how the result is separated from training examples or hidden state.
+    validations:
+      required: true
+  - type: textarea
+    id: gate
+    attributes:
+      label: Success and failure gates
+      description: Quantitative when possible. Falling loss alone is not a gate.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Allowed files and forbidden scope
+      description: Name the module boundary and anything that must remain frozen.
+    validations:
+      required: true
+  - type: dropdown
+    id: resource
+    attributes:
+      label: Resource lane
+      options:
+        - CPU only
+        - GPU exclusive (must not overlap another GPU experiment)
+        - Live desktop/input (requires explicit user presence)
+    validations:
+      required: true
+  - type: textarea
+    id: persistence
+    attributes:
+      label: Persistence and reload requirement
+      description: State what must survive process/model reload and what state must be restored.
+    validations:
+      required: true
+  - type: checkboxes
+    id: invariants
+    attributes:
+      label: Required confirmations
+      options:
+        - label: I did not request a force-push, blind merge, or destructive checkpoint reset.
+          required: true
+        - label: The task has one primary hypothesis and one measurable gate.
+          required: true
