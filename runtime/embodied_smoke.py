@@ -27,6 +27,8 @@ class _Language:
         vector = tuple((len(value.text) % 7) / 7 for _ in range(96))
         return LanguageRepresentation(value.transition_id, value.source_kind, vector, len(value.text), value.metadata)
     def learn_representation(self, transition_id, representation_gradient): return False
+    def has_trace(self, transition_id): return False
+    def discard_trace(self, transition_id): return True
     def realize(self, request):
         self.generated.append(request)
         return RealizedUtterance(request.transition_id, "живой ответ", 11, True,
