@@ -1,0 +1,339 @@
+from __future__ import annotations
+
+from collections import defaultdict, deque
+from dataclasses import dataclass
+from pathlib import Path
+import random
+import tempfile
+import time
+from typing import Mapping
+
+import torch
+from torch import Tensor
+import torch.nn.functional as F
+
+from worlds.desktop.neural import NeuralDesktopBody, VisualState
+
+
+@dataclass(slots=True)
+class OnlineExperience:
+    before: Tensor
+    after: Tensor
+    action_kind: int
+    parameters: tuple[float, float, float, float]
+    ownership: str
+    completion: bool | None
+
+    @property
+    def bucket(self) -> str:
+        outcome = "unknown" if self.completion is None else ("changed" if self.completion else "unchanged")
+        return f"{self.action_kind}:{self.ownership}:{outcome}"
+
+
+class BalancedDesktopReplay:
+    """Bounded action/ownership/outcome-stratified CPU replay."""
+
+    def __init__(self, *, capacity: int = 96, per_bucket: int = 16) -> None:
+        self.capacity = int(capacity); self.per_bucket = int(per_bucket)
+        self._buckets: dict[str, deque[OnlineExperience]] = defaultdict(
+            lambda: deque(maxlen=self.per_bucket)
+        )
+
+    def __len__(self) -> int:
+        return sum(len(values) for values in self._buckets.values())
+
+    def add(self, experience: OnlineExperience) -> None:
+        self._buckets[experience.bucket].append(experience)
+        while len(self) > self.capacity:
+            largest = max(self._buckets, key=lambda key: len(self._buckets[key]))
+            self._buckets[largest].popleft()
+            if not self._buckets[largest]:
+                del self._buckets[largest]
+
+    def sample(self, count: int) -> list[OnlineExperience]:
+        active = [values for values in self._buckets.values() if values]
+        random.shuffle(active); selected: list[OnlineExperience] = []
+        while active and len(selected) < count:
+            next_active = []
+            for values in active:
+                selected.append(random.choice(tuple(values)))
+                if len(selected) >= count:
+                    break
+                if values:
+                    next_active.append(values)
+            active = next_active
+        return selected
+
+    def state_dict(self) -> dict[str, object]:
+        return {
+            "format": 1, "capacity": self.capacity, "per_bucket": self.per_bucket,
+            "items": [item for values in self._buckets.values() for item in values],
+        }
+
+    def load_state_dict(self, payload: Mapping[str, object]) -> None:
+        if int(payload.get("format", -1)) != 1:
+            raise ValueError("unsupported Desktop replay format")
+        self._buckets.clear()
+        for item in payload.get("items", ()):  # type: ignore[assignment]
+            if isinstance(item, OnlineExperience):
+                self.add(item)
+
+
+class OnlineDesktopLearner:
+    """FAST/WORK/SLOW plasticity for the one live neural Desktop model."""
+
+    def __init__(
+        self, model: NeuralDesktopBody, *, device: torch.device,
+        replay_path: Path | None = None, learning_rate: float = 1e-5,
+        replay_capacity: int = 96, work_batch: int = 2, slow_every: int = 32,
+    ) -> None:
+        self.model = model; self.device = device; self.replay_path = replay_path
+        self.replay = BalancedDesktopReplay(capacity=replay_capacity)
+        # Consequence learning must not rewrite the action/target policy from its
+        # own consequences.  Without an external intended-action label this is a
+        # self-confirming loop: a mistaken click changes pixels, then that same
+        # change trains the selector toward the mistaken click/target.
+        # Keep motor policy plasticity for demonstration/explicit-feedback paths,
+        # but exclude it from autonomous FAST/WORK/SLOW optimizers.
+        policy_prefixes = (
+            "motor_fusion.", "action_head.", "target_query.", "target_key.",
+            "offset_head.", "key_head.", "grounding_box.", "trajectory_head.",
+        )
+        online_parameters = [
+            parameter for name, parameter in model.named_parameters()
+            if not name.startswith(policy_prefixes)
+        ]
+        self.optimizer = torch.optim.AdamW(online_parameters, lr=learning_rate, weight_decay=0.01)
+        self.scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda")
+        self.work_batch = max(1, int(work_batch)); self.slow_every = max(1, int(slow_every))
+        self.experiences = 0; self.fast_updates = 0; self.work_updates = 0; self.slow_updates = 0
+        self.skipped_nonfinite = 0
+        self.last_metrics: dict[str, float | int | str | None] = {}
+        if replay_path is not None and replay_path.exists():
+            try:
+                payload = torch.load(replay_path, map_location="cpu", weights_only=False)
+                if isinstance(payload, dict): self.replay.load_state_dict(payload)
+            except (OSError, RuntimeError, TypeError, ValueError):
+                # Corrupt replay is expendable experience, never a reason to lose the organism.
+                self.replay = BalancedDesktopReplay(capacity=replay_capacity)
+
+    @staticmethod
+    def _compact(frame: Tensor) -> Tensor:
+        resized = F.interpolate(frame.detach().float(), size=(144, 256), mode="bilinear", align_corners=False)
+        return resized.mul(255).round().clamp(0, 255).to(device="cpu", dtype=torch.uint8)[0]
+
+    @staticmethod
+    def _normal_state(state: VisualState) -> VisualState:
+        """Clone inference-mode tensors into ordinary tensors usable by autograd."""
+        with torch.inference_mode(False):
+            return VisualState(
+                state.patch_tokens.detach().clone(), state.region_tokens.detach().clone(),
+                state.region_positions.detach().clone(), state.salience.detach().clone(),
+                state.persistence.detach().clone(), state.latent.detach().clone(),
+                state.temporal_state.detach().clone(), state.grid_size,
+            )
+
+    def load_optimizer_state(self, payload: object) -> bool:
+        if not isinstance(payload, dict): return False
+        try:
+            self.optimizer.load_state_dict(payload)
+            if not self._optimizer_finite():
+                # Never carry poisoned Adam moments into a live organism.
+                self.optimizer.state.clear()
+                return False
+            return True
+        except (KeyError, RuntimeError, ValueError):
+            self.optimizer.state.clear()
+            return False
+
+    def load_learning_state(self, payload: object) -> None:
+        if not isinstance(payload, dict): return
+        self.experiences = max(0, int(payload.get("experiences", 0)))
+        self.fast_updates = max(0, int(payload.get("fast_updates", 0)))
+        self.work_updates = max(0, int(payload.get("work_updates", 0)))
+        self.slow_updates = max(0, int(payload.get("slow_updates", 0)))
+        self.skipped_nonfinite = max(0, int(payload.get("skipped_nonfinite", 0)))
+
+    def learning_state(self) -> dict[str, int]:
+        return {"experiences": self.experiences, "fast_updates": self.fast_updates,
+                "work_updates": self.work_updates, "slow_updates": self.slow_updates,
+                "skipped_nonfinite": self.skipped_nonfinite}
+
+    @staticmethod
+    def _all_finite(*values: Tensor) -> bool:
+        return all(bool(torch.isfinite(value.detach()).all()) for value in values)
+
+    def _optimizer_finite(self) -> bool:
+        for state in self.optimizer.state.values():
+            for value in state.values():
+                if torch.is_tensor(value) and not bool(torch.isfinite(value).all()):
+                    return False
+        return True
+
+    def _gradients_finite(self) -> bool:
+        for group in self.optimizer.param_groups:
+            for parameter in group["params"]:
+                if parameter.grad is not None and not bool(torch.isfinite(parameter.grad).all()):
+                    return False
+        return True
+
+    def _skip_nonfinite(self, stage: str, reason: str, started: float) -> dict[str, float | str]:
+        self.optimizer.zero_grad(set_to_none=True)
+        self.skipped_nonfinite += 1
+        self.model.eval()
+        return {f"{stage}_status": "skipped_nonfinite", f"{stage}_nonfinite": reason,
+                f"{stage}_latency_ms": (time.perf_counter() - started) * 1000.0}
+
+    def process_transition(
+        self, *, before_frame: Tensor, after_frame: Tensor,
+        before_state: VisualState, after_state: VisualState,
+        action_kind: int, parameters: tuple[float, float, float, float],
+        ownership: str, completion: bool | None,
+    ) -> dict[str, float | int | str | None]:
+        update_started = time.perf_counter()
+        metrics: dict[str, float | int | str | None] = {
+            "ownership": ownership, "completion": completion,
+        }
+        if ownership == "heiwa" and completion is not None:
+            metrics.update(self._fast(before_state, after_state, action_kind, parameters))
+        self.replay.add(OnlineExperience(
+            self._compact(before_frame), self._compact(after_frame), int(action_kind),
+            tuple(float(value) for value in parameters), ownership, completion,
+        ))
+        self.experiences += 1
+        # Meaningful own transitions update immediately. Passive/external life
+        # contributes at a lower cadence to world representation learning.
+        if ownership == "heiwa" or self.experiences % 4 == 0:
+            metrics.update(self._work(self.work_batch, stage="work"))
+            if self.work_updates and self.work_updates % self.slow_every == 0:
+                metrics.update(self._work(max(4, self.work_batch), stage="slow"))
+        metrics["replay_size"] = len(self.replay)
+        metrics["online_total_ms"] = (time.perf_counter() - update_started) * 1000.0
+        self.last_metrics = metrics
+        return metrics
+
+    def _fast(
+        self, before: VisualState, after: VisualState, action_kind: int,
+        parameters: tuple[float, float, float, float],
+    ) -> dict[str, float]:
+        started = time.perf_counter()
+        before = self._normal_state(before); after = self._normal_state(after)
+        kind = torch.tensor([action_kind], device=self.device)
+        values = torch.tensor([parameters], device=self.device)
+        self.model.train(); self.optimizer.zero_grad(set_to_none=True)
+        predicted, change_logits = self.model.predict_next(before, kind, values)
+        patch_change = 1.0 - F.cosine_similarity(before.patch_tokens, after.patch_tokens, dim=-1)
+        temporal = F.smooth_l1_loss(predicted, after.latent.detach())
+        change = F.binary_cross_entropy_with_logits(change_logits, patch_change.gt(0.02).float())
+        loss = temporal + change
+        if not self._all_finite(predicted, change_logits, temporal, change, loss):
+            return self._skip_nonfinite("fast", "forward_or_loss", started)
+        loss.backward()
+        if not self._gradients_finite():
+            return self._skip_nonfinite("fast", "gradient", started)
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+        if not self._gradients_finite():
+            return self._skip_nonfinite("fast", "gradient_after_clip", started)
+        self.optimizer.step(); self.model.eval()
+        self.fast_updates += 1
+        return {"fast_loss": float(loss.detach()), "fast_temporal": float(temporal.detach()),
+                "fast_change": float(change.detach()),
+                "fast_latency_ms": (time.perf_counter() - started) * 1000.0}
+
+    def _work(self, count: int, *, stage: str) -> dict[str, float]:
+        started = time.perf_counter()
+        items = self.replay.sample(count)
+        if not items: return {}
+        height, width = self.model.config.image_height, self.model.config.image_width
+        before = torch.stack([item.before for item in items]).to(self.device).float().div_(255)
+        after = torch.stack([item.after for item in items]).to(self.device).float().div_(255)
+        before = F.interpolate(before, size=(height, width), mode="bilinear", align_corners=False)
+        after = F.interpolate(after, size=(height, width), mode="bilinear", align_corners=False)
+        actions = torch.tensor([item.action_kind for item in items], device=self.device)
+        parameters = torch.tensor([item.parameters for item in items], device=self.device)
+        self.model.train(); self.optimizer.zero_grad(set_to_none=True)
+        autocast = torch.autocast(device_type="cuda", dtype=torch.float16, enabled=self.device.type == "cuda")
+        with autocast:
+            # Autonomous WORK/SLOW learning has no ground-truth action label.
+            # Do not move the shared visual/temporal representation underneath
+            # an action_head that receives no corresponding action-selection
+            # gradient: that caused motor-policy collapse (e.g. right_click for
+            # almost every frame).  Predictor/competence/grounding heads can
+            # still learn from detached visual states.
+            with torch.no_grad():
+                first_observed = self.model.observe(before)
+                second_observed = self.model.observe(after, first_observed, actions, parameters)
+            first = self._normal_state(first_observed)
+            second = self._normal_state(second_observed)
+            predicted, change_logits = self.model.predict_next(first, actions, parameters)
+            motor = self.model.propose(first)
+            difference = (after - before).abs().mean(dim=1)
+            patch_target = F.adaptive_avg_pool2d(
+                difference.unsqueeze(1), first.grid_size
+            ).flatten(1).gt(0.04).float()
+            temporal = F.smooth_l1_loss(predicted, second.latent.detach())
+            change = F.binary_cross_entropy_with_logits(change_logits, patch_target)
+            feature = F.smooth_l1_loss(
+                self.model.feature_predictor(first.patch_tokens.mean(1)),
+                second.patch_tokens.mean(1).detach(),
+            )
+            losses = [temporal, change, feature]
+            own = torch.tensor([item.ownership == "heiwa" and item.completion is not None for item in items], device=self.device)
+            competence = torch.zeros((), device=self.device)
+            if bool(own.any()):
+                target = torch.tensor([bool(item.completion) for item in items], device=self.device, dtype=torch.float32)
+                competence = F.binary_cross_entropy_with_logits(motor.confidence_logits[own], target[own])
+                losses.append(competence)
+            points: list[Tensor] = []; boxes: list[Tensor] = []; rows: list[int] = []
+            for index, item in enumerate(items):
+                mask = difference[index].gt(0.03)
+                if item.ownership != "heiwa" or item.completion is None or int(mask.sum()) < 4: continue
+                yy, xx = mask.nonzero(as_tuple=True)
+                points.append(torch.stack((xx.float().mean() / max(width - 1, 1), yy.float().mean() / max(height - 1, 1))))
+                boxes.append(torch.stack((xx.min() / max(width - 1, 1), yy.min() / max(height - 1, 1),
+                                          xx.max() / max(width - 1, 1), yy.max() / max(height - 1, 1))))
+                rows.append(index)
+            grounding = torch.zeros((), device=self.device)
+            if rows:
+                row_tensor = torch.tensor(rows, device=self.device)
+                grounding = F.smooth_l1_loss(motor.target_point[row_tensor], torch.stack(points))
+                grounding = grounding + F.smooth_l1_loss(motor.target_bbox[row_tensor], torch.stack(boxes))
+                losses.append(grounding)
+            total = sum(losses)
+        finite_terms = [predicted, change_logits, temporal, change, feature, total]
+        if bool(own.any()): finite_terms.append(competence)
+        if rows: finite_terms.append(grounding)
+        if not self._all_finite(*finite_terms):
+            return self._skip_nonfinite(stage, "forward_or_loss", started)
+        self.scaler.scale(total).backward(); self.scaler.unscale_(self.optimizer)
+        if not self._gradients_finite():
+            return self._skip_nonfinite(stage, "gradient", started)
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+        if not self._gradients_finite():
+            return self._skip_nonfinite(stage, "gradient_after_clip", started)
+        self.scaler.step(self.optimizer); self.scaler.update(); self.model.eval()
+        if not self._optimizer_finite():
+            # A non-finite optimizer state must never be persisted.  Drop moments;
+            # model parameters remain protected by the finite forward/gradient checks.
+            self.optimizer.state.clear()
+        if stage == "slow": self.slow_updates += 1
+        else: self.work_updates += 1
+        result = {f"{stage}_loss": float(total.detach()), f"{stage}_temporal": float(temporal.detach()),
+                  f"{stage}_change": float(change.detach()), f"{stage}_feature": float(feature.detach()),
+                  f"{stage}_latency_ms": (time.perf_counter() - started) * 1000.0}
+        if bool(own.any()): result[f"{stage}_competence"] = float(competence.detach())
+        if rows:
+            result[f"{stage}_grounding"] = float(grounding.detach())
+            result["observed_target_x"] = float(torch.stack(points)[0, 0])
+            result["observed_target_y"] = float(torch.stack(points)[0, 1])
+        return result
+
+    def save_replay(self) -> None:
+        if self.replay_path is None: return
+        self.replay_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(dir=self.replay_path.parent, delete=False) as stream:
+            temporary = Path(stream.name)
+        try:
+            torch.save(self.replay.state_dict(), temporary); temporary.replace(self.replay_path)
+        finally:
+            temporary.unlink(missing_ok=True)

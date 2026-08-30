@@ -1,0 +1,10 @@
+{
+  "train": [
+    "real_holdout/chat_rgb.png",
+    "real_holdout/video_rgb.png"
+  ],
+  "holdout": [
+    "real_holdout/messenger_rgb.png",
+    "real_holdout/forum_rgb.png"
+  ]
+}

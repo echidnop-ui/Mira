@@ -1,0 +1,13 @@
+.heiwa-cursor-overlay { background-color: transparent; }
+.heiwa-candidate { border: 2px solid rgba(38,166,255,0.65); background-color: rgba(38,166,255,0.04); }
+.heiwa-rejected { border: 2px solid rgba(255,30,30,0.84); background-color: rgba(255,30,30,0.18); }
+.heiwa-hard-rejected { border: 4px solid rgba(255,20,20,1.0); background-color: rgba(255,20,20,0.22); }
+.heiwa-attempted { border: 4px solid rgba(255,148,20,0.98); background-color: rgba(255,148,20,0.07); }
+.heiwa-accepted { border: 5px solid rgba(30,255,82,1.0); background-color: rgba(30,255,82,0.08); }
+.heiwa-proposal { border: 4px solid rgba(255,25,242,1.0); background-color: rgba(255,25,242,0.04); }
+.heiwa-fovea { border: 3px solid rgba(255,235,40,0.95); background-color: rgba(255,235,40,0.025); }
+.heiwa-focus-point { border: 2px solid rgba(255,255,160,1.0); border-radius: 7px; background-color: rgba(255,235,40,0.18); }
+.heiwa-guided { border: 4px solid rgba(12,242,255,0.95); background-color: rgba(12,242,255,0.03); }
+.heiwa-trace { border-radius: 5px; background-color: rgb(12,242,255); }
+.heiwa-status { color: white; background-color: rgba(5,5,5,0.82); padding: 8px 12px; font-size: 18px; font-weight: bold; }
+.heiwa-status-held { color: #ff3030; background-color: rgba(5,5,5,0.88); padding: 8px 12px; font-size: 18px; font-weight: bold; }

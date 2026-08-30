@@ -1,0 +1,22 @@
+# Local Python environments and caches
+.venv*/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+
+# Runtime state, learned weights, and local telemetry
+state/
+*.pt
+*.pth
+*.ckpt
+events.last2000.jsonl
+*.log
+erl_crash.dump
+
+# Local editor and OS metadata
+.idea/
+.vscode/
+.DS_Store

@@ -1,0 +1,7 @@
+{
+  "uuid": "heiwa-cursor-overlay@local",
+  "name": "Heiwa Cursor Patterns",
+  "description": "Click-through visualization of Heiwa neural cursor targets and teacher corrections",
+  "shell-version": ["50"],
+  "version": 1
+}

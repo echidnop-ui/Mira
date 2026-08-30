@@ -1,0 +1,20 @@
+[Unit]
+Description=Heiwa unified autonomous embodied runtime
+After=graphical-session.target
+PartOf=graphical-session.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=/home/echidna/heiwa_v2
+ExecStart=/home/echidna/heiwa_v2/.venv-rocm/bin/python -m runtime.embodied --config /home/echidna/heiwa_v2/state/runtime_config.json
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=120
+KillSignal=SIGTERM
+Environment=PYTHONUNBUFFERED=1
+PassEnvironment=WAYLAND_DISPLAY DISPLAY XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS AT_SPI_BUS_ADDRESS XAUTHORITY
+
+[Install]
+WantedBy=graphical-session.target

@@ -1,0 +1,1 @@
+V4: autonomous consequence learning no longer updates motor action/target selector. repair_action_head now recalibrates both action class and spatial target from human demonstrations. verify_motor_checkpoint confirms the repaired marker and prints probe distributions.
