@@ -18,6 +18,7 @@ from contracts.cognition import (
     Observation,
 )
 from core.interface import CognitiveCore, CoreInput, IntegratedCognitiveState
+from language.interface import LanguageOrgan
 from policy.interface import TrainableActionPolicy
 from worlds.interface import (
     WorldAdapter,
@@ -54,6 +55,7 @@ class CausalLearningSignal:
 
     policy_advantage: float | None = None
     core_output_gradient: tuple[float, ...] = ()
+    language_representation_gradient: tuple[float, ...] = ()
     terminal: bool = True
 
 
@@ -84,6 +86,7 @@ class CausalLearningResult:
     policy_updated: bool
     core_updated: bool
     resolved: bool
+    language_updated: bool = False
     skipped_reason: str | None = None
 
 
@@ -113,6 +116,7 @@ class CausalCognitionCycle:
         policy: TrainableActionPolicy,
         input_builder: CoreInputBuilder,
         consequence_interpreter: ConsequenceInterpreter,
+        language: LanguageOrgan | None = None,
         transition_prefix: str | None = None,
     ) -> None:
         self._world = world
@@ -120,6 +124,7 @@ class CausalCognitionCycle:
         self._policy = policy
         self._input_builder = input_builder
         self._consequence_interpreter = consequence_interpreter
+        self._language = language
         prefix = transition_prefix or f"causal:{uuid4().hex}"
         self._transition_prefix = prefix.strip()
         if not self._transition_prefix:
@@ -190,6 +195,8 @@ class CausalCognitionCycle:
         except Exception:
             self._core.discard_trace(transition_id)
             self._policy.discard_trace(transition_id)
+            if self._language is not None:
+                self._language.discard_trace(transition_id)
             raise
 
         started = PendingTransition(
@@ -573,7 +580,8 @@ class CausalCognitionCycle:
         self._validate_learning_signal(signal)
 
         if not signal.terminal:
-            if signal.policy_advantage is not None or signal.core_output_gradient:
+            if (signal.policy_advantage is not None or signal.core_output_gradient
+                    or signal.language_representation_gradient):
                 raise CausalCycleError(
                     "non-terminal consequence cannot consume one-shot learning traces"
                 )
@@ -582,6 +590,7 @@ class CausalCognitionCycle:
                 consequence_id=consequence.id,
                 policy_updated=False,
                 core_updated=False,
+                language_updated=False,
                 resolved=False,
             )
 
@@ -596,6 +605,12 @@ class CausalCognitionCycle:
             and not self._core.has_trace(transition.transition_id)
         ):
             missing_traces.append("core")
+        if (
+            signal.language_representation_gradient
+            and (self._language is None
+                 or not self._language.has_trace(transition.transition_id))
+        ):
+            missing_traces.append("language")
 
         if missing_traces:
             # Learning calls consume traces and mutate parameters.  Preflight
@@ -605,12 +620,15 @@ class CausalCognitionCycle:
             # discarded because this causal transition cannot be replayed.
             self._policy.discard_trace(transition.transition_id)
             self._core.discard_trace(transition.transition_id)
+            if self._language is not None:
+                self._language.discard_trace(transition.transition_id)
             del self._pending[transition.transition_id]
             return CausalLearningResult(
                 transition_id=transition.transition_id,
                 consequence_id=consequence.id,
                 policy_updated=False,
                 core_updated=False,
+                language_updated=False,
                 resolved=True,
                 skipped_reason=(
                     "missing_causal_trace:" + ",".join(missing_traces)
@@ -643,12 +661,29 @@ class CausalCognitionCycle:
                     "Core causal trace was missing for consequence"
                 )
 
+        if not signal.language_representation_gradient:
+            if self._language is not None:
+                self._language.discard_trace(transition.transition_id)
+            language_updated = False
+        else:
+            if self._language is None:
+                raise CausalCycleError("Language credit requires a Language organ")
+            language_updated = self._language.learn_representation(
+                transition.transition_id,
+                signal.language_representation_gradient,
+            )
+            if not language_updated:
+                raise CausalCycleError(
+                    "Language causal trace was missing for consequence"
+                )
+
         del self._pending[transition.transition_id]
         return CausalLearningResult(
             transition_id=transition.transition_id,
             consequence_id=consequence.id,
             policy_updated=policy_updated,
             core_updated=core_updated,
+            language_updated=language_updated,
             resolved=True,
         )
 
@@ -733,6 +768,18 @@ class CausalCognitionCycle:
             )
         if not all(math.isfinite(float(value)) for value in gradient):
             raise CausalCycleError("core_output_gradient must contain finite values")
+        language_gradient: Sequence[float] = signal.language_representation_gradient
+        if language_gradient:
+            if self._language is None:
+                raise CausalCycleError("Language credit requires a Language organ")
+            if len(language_gradient) != self._language.representation_size:
+                raise CausalCycleError(
+                    "language_representation_gradient size does not match Language representation"
+                )
+        if not all(math.isfinite(float(value)) for value in language_gradient):
+            raise CausalCycleError(
+                "language_representation_gradient must contain finite values"
+            )
 
     def _new_transition_id(self) -> str:
         transition_id = (
