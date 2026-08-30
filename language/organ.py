@@ -671,6 +671,9 @@ class NeuralLanguageOrgan(nn.Module):
     def discard_trace(self, transition_id: str) -> bool:
         return self._traces.pop(transition_id.strip(), None) is not None
 
+    def has_trace(self, transition_id: str) -> bool:
+        return transition_id.strip() in self._traces
+
     def telemetry(self) -> LanguageTelemetry:
         return LanguageTelemetry(
             forward_calls=self._forward_calls,
