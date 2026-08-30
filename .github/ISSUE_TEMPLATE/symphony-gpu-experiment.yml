@@ -1,0 +1,94 @@
+name: Symphony GPU experiment
+description: Exclusive RX 6800 neural experiment with staged evidence and artifact persistence
+title: "[GPU EXPERIMENT] "
+labels:
+  - symphony-gpu-ready
+  - resource:gpu
+  - stage:tester
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The GPU lane runs exactly one agent at a time. Tester begins read-only.
+        Candidate checkpoints are never promoted to live state automatically.
+  - type: dropdown
+    id: module
+    attributes:
+      label: Target neural module
+      options:
+        - vision/desktop perception
+        - desktop motor/policy
+        - language
+        - core
+        - memory
+        - learning
+        - cross-organ integration
+    validations:
+      required: true
+  - type: textarea
+    id: hypothesis
+    attributes:
+      label: One hypothesis
+      description: State the bottleneck category and the single claim this experiment tests.
+    validations:
+      required: true
+  - type: textarea
+    id: checkpoint
+    attributes:
+      label: Checkpoint before and restoration plan
+      description: Exact read-only source path/hash and what must be restored after probes/interruption.
+    validations:
+      required: true
+  - type: textarea
+    id: data
+    attributes:
+      label: Dataset and source-separated splits
+      description: Train, validation, final holdout, seeds, leakage controls and sample counts.
+    validations:
+      required: true
+  - type: textarea
+    id: baseline
+    attributes:
+      label: Baseline command
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: budget
+    attributes:
+      label: Training budget and expected duration
+      description: Epochs/steps/samples plus maximum wall time and VRAM expectation.
+    validations:
+      required: true
+  - type: textarea
+    id: gates
+    attributes:
+      label: Acceptance, failure and retention gates
+      description: Include distributions/tails and previously accepted skills that must not regress.
+    validations:
+      required: true
+  - type: textarea
+    id: change
+    attributes:
+      label: Allowed one-change category and forbidden scope
+      description: Data, loss, decoder, optimizer, curriculum, augmentation or architecture — choose one.
+    validations:
+      required: true
+  - type: textarea
+    id: artifacts
+    attributes:
+      label: Required artifacts
+      description: Checkpoint, metrics, plots, failure examples and experiment journal filenames.
+    validations:
+      required: true
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Required confirmations
+      options:
+        - label: No other GPU training is intentionally running during this experiment.
+          required: true
+        - label: Final holdout will not be used for training, mining, thresholds or epoch selection.
+          required: true
+        - label: Live checkpoints and unrelated organs must not be overwritten or reset.
+          required: true

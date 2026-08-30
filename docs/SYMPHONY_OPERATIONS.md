@@ -16,12 +16,18 @@ The Tester/Fixer/Integrator pipeline is Heiwa policy implemented in
 
 ## Local installation
 
-- launcher: `/home/echidna/.local/bin/heiwa-symphony`
-- workflow: `automation/symphony/WORKFLOW.md`
+- CPU launcher: `/home/echidna/.local/bin/heiwa-symphony`
+- GPU launcher: `/home/echidna/.local/bin/heiwa-symphony-gpu`
+- CPU workflow: `automation/symphony/WORKFLOW.md`
+- GPU workflow: `automation/symphony/GPU_WORKFLOW.md`
 - secret: `/home/echidna/.config/symphony/heiwa/secrets/github-token`
-- workspaces: `/home/echidna/.local/share/symphony/heiwa-workspaces`
-- logs: `/home/echidna/.local/state/symphony/heiwa-logs`
-- dashboard: `http://127.0.0.1:4040/`
+- CPU workspaces: `/home/echidna/.local/share/symphony/heiwa-workspaces`
+- GPU workspaces: `/home/echidna/.local/share/symphony/heiwa-gpu-workspaces`
+- GPU artifacts: `/home/echidna/.local/share/symphony/heiwa-gpu-artifacts`
+- CPU logs: `/home/echidna/.local/state/symphony/heiwa-logs`
+- GPU logs: `/home/echidna/.local/state/symphony/heiwa-gpu-logs`
+- CPU dashboard: `http://127.0.0.1:4040/`
+- GPU dashboard: `http://127.0.0.1:4041/`
 
 The secret must remain outside Git and have mode `0600`.
 
@@ -29,6 +35,14 @@ Start after login or reboot:
 
 ```bash
 heiwa-symphony
+heiwa-symphony-gpu
+```
+
+User services are installed as `heiwa-symphony.service` and
+`heiwa-symphony-gpu.service`. Inspect them with:
+
+```bash
+systemctl --user status heiwa-symphony heiwa-symphony-gpu
 ```
 
 The launcher refuses a missing/unsafe token and a duplicate listener. `Ctrl+C`
@@ -137,10 +151,28 @@ the initial dispatch labels automatically.
 
 ## GPU lane
 
-GPU experiments must be serialized separately. Before enabling one, the Issue
-must name its checkpoint, dataset/split, expected duration, acceptance gate and
-state-restoration plan. A CPU Symphony agent must never opportunistically start
-ROCm work.
+GPU experiments are serialized by `GPU_WORKFLOW.md` and require all labels:
+
+```text
+symphony-gpu-ready
+resource:gpu
+stage:tester | stage:fixer | stage:integrator
+```
+
+The lane has concurrency `1`. Its Codex app-server holds a host `flock` for the
+entire turn. Before enabling an experiment, the Issue must name its checkpoint,
+dataset/split, expected duration, acceptance/retention gates and restoration
+plan. Use the `Symphony GPU experiment` Issue Form.
+
+GPU agents write candidate checkpoints, metrics, plots and journals under
+`state/symphony_artifacts/` inside their workspace. Lifecycle hooks copy those
+files to the persistent GPU artifact root after every attempt and before
+workspace removal. No candidate checkpoint is promoted into live Heiwa state
+automatically.
+
+A CPU Symphony agent must never opportunistically start ROCm work. A manual GPU
+job does not automatically honor Symphony's lock; do not schedule one at the
+same time as a GPU-ready Issue.
 
 ## Failure recovery
 

@@ -1111,6 +1111,7 @@ Language, Memory, and Core internals, the architecture needs correction.
 Automated Codex work is governed by:
 
     automation/symphony/WORKFLOW.md
+    automation/symphony/GPU_WORKFLOW.md
     docs/SYMPHONY_OPERATIONS.md
 
 GitHub Issues and their structured stage comments are the active execution
